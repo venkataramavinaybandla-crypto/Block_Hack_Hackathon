@@ -1,0 +1,1090 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>CERBERUS — x402 AI Legal Contract Risk Analyzer</title>
+  <meta name="description" content="AI-powered legal contract risk analyzer gated by Algorand x402 micropayments."/>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🐕🦺%3C/text%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <!-- Client-side document text extraction: PDF.js + mammoth (Word) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+  <style>
+    :root {
+      --bg: #faf8f5;
+      --bg-alt: #f3efe9;
+      --surface: #ffffff;
+      --border: #e8e2d9;
+      --border-dark: #d5ccbf;
+      --text: #191918;
+      --text-muted: #66635d;
+      --text-faint: #99948c;
+      --accent: #cc5500;
+      --accent-hover: #b34700;
+      --accent-light: #fdf5f0;
+      --high-bg: #fdf2f0;
+      --high-border: #f7d4ce;
+      --high-text: #c0392b;
+      --med-bg: #fdf9f0;
+      --med-border: #f6e7c8;
+      --med-text: #b45309;
+      --low-bg: #f4f8f5;
+      --low-border: #d2e4d8;
+      --low-text: #276749;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      border-bottom: 1px solid var(--border);
+      background: var(--bg);
+      padding: 20px 40px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-mark {
+      font-size: 1.6rem;
+      line-height: 1;
+    }
+
+    .brand-title {
+      font-family: Georgia, serif;
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -0.3px;
+    }
+
+    .brand-subtitle {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+    }
+
+    .header-nav {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .tag-net {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-muted);
+      background: var(--bg-alt);
+      padding: 5px 12px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      font-weight: 600;
+    }
+
+    .tag-price {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--accent);
+      background: var(--accent-light);
+      padding: 5px 12px;
+      border-radius: 4px;
+      border: 1px solid var(--high-border);
+      font-weight: 600;
+    }
+
+    /* ── Main Container ── */
+    main {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 48px 24px 80px;
+    }
+
+    .hero-section {
+      margin-bottom: 40px;
+    }
+
+    .hero-title {
+      font-family: Georgia, serif;
+      font-size: 2.3rem;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 12px;
+      letter-spacing: -0.5px;
+    }
+
+    .hero-desc {
+      font-size: 1.05rem;
+      color: var(--text-muted);
+      max-width: 680px;
+      font-weight: 400;
+    }
+
+    /* ── Step Indicator ── */
+    .steps-nav {
+      display: flex;
+      gap: 24px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 12px;
+      margin-bottom: 32px;
+    }
+
+    .step-item {
+      font-size: 0.85rem;
+      color: var(--text-faint);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 500;
+    }
+
+    .step-item.active {
+      color: var(--accent);
+    }
+
+    .step-item.done {
+      color: var(--text);
+    }
+
+    .step-num {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      border: 1px solid var(--border-dark);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.72rem;
+    }
+
+    .step-item.active .step-num {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: white;
+    }
+
+    /* ── Card & Input Surface ── */
+    .editor-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.02);
+      overflow: hidden;
+      margin-bottom: 32px;
+    }
+
+    .editor-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--bg);
+    }
+
+    .editor-label {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 320px;
+      padding: 20px;
+      border: none;
+      background: var(--surface);
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      line-height: 1.6;
+      resize: vertical;
+      outline: none;
+    }
+
+    /* ── File Upload Zone ── */
+    .upload-zone {
+      margin: 14px 20px 0;
+      border: 2px dashed var(--border-dark);
+      border-radius: 8px;
+      background: var(--bg);
+      padding: 18px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+
+    .upload-zone:hover, .upload-zone.dragging {
+      border-color: var(--accent);
+      background: var(--accent-light);
+    }
+
+    .upload-icon { font-size: 1.6rem; line-height: 1; margin-bottom: 6px; }
+    .upload-title { font-size: 0.92rem; font-weight: 600; color: var(--text); }
+    .upload-sub { font-size: 0.78rem; color: var(--text-muted); margin-top: 2px; }
+    .upload-zone .btn-secondary { margin-top: 10px; }
+
+    .file-chip {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border-dark);
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 0.85rem;
+      margin: 14px 20px 0;
+      text-align: left;
+    }
+
+    .file-chip-icon { font-size: 1.1rem; }
+    .file-chip-name { font-weight: 600; color: var(--text); word-break: break-all; flex: 1; }
+    .file-chip-size { color: var(--text-faint); font-size: 0.75rem; white-space: nowrap; }
+    .file-chip-status { font-size: 0.78rem; color: var(--low-text); white-space: nowrap; }
+    .file-chip-remove {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 0.9rem;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    .file-chip-remove:hover { color: var(--high-text); background: var(--high-bg); }
+
+    .editor-footer {
+      padding: 14px 20px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--bg);
+    }
+
+    .char-counter {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    /* Buttons & Spinner */
+    .btn-primary {
+      background: var(--accent);
+      color: white;
+      border: none;
+      padding: 10px 24px;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s ease;
+      font-family: inherit;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: var(--accent-hover);
+    }
+
+    .btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #ffffff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      display: inline-block;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── 402 Modal / Payment Panel ── */
+    #paymentBox {
+      display: none;
+      background: var(--surface);
+      border: 1px solid var(--border-dark);
+      border-radius: 8px;
+      margin-bottom: 32px;
+      overflow: hidden;
+    }
+
+    .payment-header {
+      background: var(--accent-light);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .payment-title {
+      font-family: Georgia, serif;
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--accent);
+    }
+
+    .payment-body {
+      padding: 24px;
+    }
+
+    .pay-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+
+    .pay-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .pay-field-label {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    .pay-field-value {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .address-box {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      color: var(--text);
+      word-break: break-all;
+      margin-bottom: 16px;
+    }
+
+    .input-txid {
+      width: 100%;
+      padding: 12px 14px;
+      border: 1px solid var(--border-dark);
+      border-radius: 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      outline: none;
+      margin-bottom: 8px;
+      background: var(--surface);
+    }
+
+    .input-txid:focus {
+      border-color: var(--accent);
+    }
+
+    .demo-hint {
+      font-size: 0.78rem;
+      color: var(--low-text);
+      background: var(--low-bg);
+      border: 1px solid var(--low-border);
+      padding: 8px 12px;
+      border-radius: 4px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .action-row {
+      display: flex;
+      gap: 12px;
+    }
+
+    .btn-secondary {
+      background: transparent;
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      padding: 10px 16px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      font-family: inherit;
+    }
+
+    .btn-secondary:hover {
+      border-color: var(--text-muted);
+      color: var(--text);
+    }
+
+    /* ── Status Messages ── */
+    #statusBar {
+      display: none;
+      padding: 14px 20px;
+      border-radius: 6px;
+      font-size: 0.88rem;
+      margin-bottom: 24px;
+      border: 1px solid transparent;
+      align-items: center;
+      gap: 12px;
+    }
+
+    #statusBar.info { background: #f0f4f8; border-color: #d0e0f0; color: #1e40af; }
+    #statusBar.success { background: var(--low-bg); border-color: var(--low-border); color: var(--low-text); }
+    #statusBar.error { background: var(--high-bg); border-color: var(--high-border); color: var(--high-text); }
+    #statusBar.warning { background: var(--med-bg); border-color: var(--med-border); color: var(--med-text); }
+
+    /* ── Results List ── */
+    #resultsSection {
+      display: none;
+      margin-top: 40px;
+    }
+
+    .results-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 12px;
+      margin-bottom: 24px;
+    }
+
+    .results-header h2 {
+      font-family: Georgia, serif;
+      font-size: 1.5rem;
+      font-weight: 500;
+    }
+
+    .clause-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 24px;
+      margin-bottom: 20px;
+      transition: border-color 0.15s ease;
+    }
+
+    .clause-card:hover {
+      border-color: var(--border-dark);
+    }
+
+    .clause-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+
+    .clause-text {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      color: var(--text);
+      background: var(--bg);
+      padding: 10px 14px;
+      border-radius: 4px;
+      border-left: 3px solid var(--border-dark);
+      flex: 1;
+    }
+
+    .risk-badge {
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      padding: 4px 10px;
+      border-radius: 4px;
+      white-space: nowrap;
+    }
+
+    .risk-badge.high { background: var(--high-bg); border: 1px solid var(--high-border); color: var(--high-text); }
+    .risk-badge.medium { background: var(--med-bg); border: 1px solid var(--med-border); color: var(--med-text); }
+    .risk-badge.low { background: var(--low-bg); border: 1px solid var(--low-border); color: var(--low-text); }
+
+    .clause-section-title {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: var(--text-muted);
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+
+    .clause-reason {
+      font-size: 0.92rem;
+      color: var(--text);
+      margin-bottom: 16px;
+    }
+
+    .clause-rewrite {
+      background: var(--low-bg);
+      border: 1px solid var(--low-border);
+      border-radius: 6px;
+      padding: 14px;
+      font-size: 0.9rem;
+      color: var(--low-text);
+      line-height: 1.5;
+    }
+
+    .docs-info {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 24px;
+      margin-top: 40px;
+    }
+
+    .docs-info h3 {
+      font-family: Georgia, serif;
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .docs-info p {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="brand-mark">🐕‍🦺</div>
+    <div>
+      <div class="brand-title">CERBERUS</div>
+      <div class="brand-subtitle">AI Legal Contract Risk Analyzer</div>
+    </div>
+  </div>
+  <div class="header-nav">
+    <span class="tag-net">Algorand Testnet</span>
+    <span class="tag-price">$0.01 USDC / Analysis</span>
+  </div>
+</header>
+
+<main>
+  <div class="hero-section">
+    <h1 class="hero-title">CERBERUS Risk Guardian</h1>
+    <p class="hero-desc">Identify legal and financial risks in contracts. Protected by Algorand x402 micropayments ($0.01 USDC per analysis).</p>
+  </div>
+
+  <div class="steps-nav">
+    <div class="step-item active" id="step1"><span class="step-num">1</span> Upload or Paste Contract</div>
+    <div class="step-item" id="step2"><span class="step-num">2</span> Payment Challenge</div>
+    <div class="step-item" id="step3"><span class="step-num">3</span> On-Chain Verification</div>
+    <div class="step-item" id="step4"><span class="step-num">4</span> Risk Analysis</div>
+  </div>
+
+  <!-- Contract Input Editor -->
+  <div class="editor-card">
+    <div class="editor-header">
+      <span class="editor-label">Contract Document</span>
+      <span class="char-counter" id="charCount">0 characters</span>
+    </div>
+
+    <!-- Document Upload (PDF / Word / any type) -->
+    <div class="upload-zone" id="uploadZone">
+      <input type="file" id="fileInput" hidden
+             accept=".pdf,.doc,.docx,.odt,.rtf,.txt,.md,.csv,.json,.html,.htm,application/pdf,text/plain"/>
+      <div class="upload-icon">📄</div>
+      <div class="upload-title">Drag &amp; drop a contract document</div>
+      <div class="upload-sub">PDF · Word (.doc/.docx) · ODT · RTF · TXT · HTML — or click to browse</div>
+      <button type="button" class="btn-secondary" onclick="document.getElementById('fileInput').click()">Choose File</button>
+    </div>
+
+    <div class="file-chip" id="fileChip">
+      <span class="file-chip-icon">📎</span>
+      <span class="file-chip-name" id="fileName"></span>
+      <span class="file-chip-size" id="fileSize"></span>
+      <span class="file-chip-status" id="fileStatus"></span>
+      <button class="file-chip-remove" title="Remove file" onclick="clearFile()">✕</button>
+    </div>
+
+    <textarea id="contractText" placeholder="Paste legal agreement text here... or upload a document above."></textarea>
+    <div class="editor-footer">
+      <span style="font-size: 0.8rem; color: var(--text-muted)">Powered by Ollama Mistral LLM Engine</span>
+      <button class="btn-primary" id="analyzeBtn" onclick="startAnalysis()" disabled>
+        <span id="btnSpinner" class="spinner" style="display:none;"></span>
+        <span id="btnText">Analyze Contract</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- 402 Payment Box -->
+  <div id="paymentBox">
+    <div class="payment-header">
+      <div class="payment-title">HTTP 402 — Payment Required</div>
+      <span style="font-size: 0.8rem; color: var(--accent); font-weight: 500;">x402 Protocol v2</span>
+    </div>
+    <div class="payment-body">
+      <div class="pay-grid">
+        <div class="pay-field">
+          <span class="pay-field-label">Required Payment</span>
+          <span class="pay-field-value" id="payAmount">$0.01 USDC (ASA 10458941)</span>
+        </div>
+        <div class="pay-field">
+          <span class="pay-field-label">Network</span>
+          <span class="pay-field-value">Algorand Testnet</span>
+        </div>
+      </div>
+
+      <div class="pay-field" style="margin-bottom: 12px;">
+        <span class="pay-field-label">Recipient Wallet Address</span>
+        <div class="address-box" id="receiverAddr">3LMI2BONQHGE6SCKLONQYJQCYIA5R32P5PEXLNXKUQS3CAMXRDDLBV342I</div>
+      </div>
+
+      <div class="pay-field" style="margin-bottom: 8px;">
+        <span class="pay-field-label">Algorand Transaction ID (TxID)</span>
+        <input type="text" id="txidInput" class="input-txid" value="SIAKOLZAYLX3UZK5IL26SLDUDN523ZNSU65HF4CEYS4YOP5WDVKQ" placeholder="Paste 52-character confirmed transaction ID..."/>
+      </div>
+
+      <div class="demo-hint">
+        <span>⚡ Pre-filled with valid confirmed Algorand Testnet TxID for instant execution.</span>
+        <button class="btn-secondary" onclick="resetTxId()" style="padding:4px 10px; font-size:0.75rem;">Reset TxID</button>
+      </div>
+
+      <div class="action-row">
+        <button class="btn-primary" id="submitPayBtn" onclick="submitPayment()">
+          <span id="submitSpinner" class="spinner" style="display:none;"></span>
+          <span id="submitBtnText">Submit & Verify Payment</span>
+        </button>
+        <button class="btn-secondary" onclick="openFundPage()">Faucet</button>
+        <button class="btn-secondary" onclick="openReceiverExplorer()">View Explorer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Status Bar -->
+  <div id="statusBar"></div>
+
+  <!-- Results Section -->
+  <div id="resultsSection">
+    <div class="results-header">
+      <h2>Flagged Clause Risks</h2>
+      <div id="resultsStats" style="font-size:0.85rem; color: var(--text-muted)"></div>
+    </div>
+    <div id="resultsGrid"></div>
+  </div>
+
+  <div class="docs-info">
+    <h3>About CERBERUS x402 Architecture</h3>
+    <p>CERBERUS operates as an x402 resource server gateway. Requests to <code>POST /analyze-contract</code> return HTTP 402 until an on-chain USDC payment transaction is submitted and verified against the Algorand Testnet Indexer. Contract text can be pasted directly or extracted from uploaded documents (PDF, Word, ODT, RTF, HTML, plain text) — client-side via PDF.js/mammoth, with a server-side <code>/extract-text</code> fallback for other formats.</p>
+  </div>
+</main>
+
+<script>
+  const X402_SERVER = 'http://localhost:4021';
+  const AI_BACKEND  = 'http://localhost:8000';
+
+  // Demo / instant-execution mode: this TxID is accepted by the gateway without
+  // an indexer round-trip (DEMO_MODE=true in x402-server/.env).
+  const DEMO_TXID = 'SIAKOLZAYLX3UZK5IL26SLDUDN523ZNSU65HF4CEYS4YOP5WDVKQ';
+
+  let currentReceiverAddr = '3LMI2BONQHGE6SCKLONQYJQCYIA5R32P5PEXLNXKUQS3CAMXRDDLBV342I';
+  let isProcessing = false;
+
+  function resetTxId() {
+    document.getElementById('txidInput').value = DEMO_TXID;
+    showStatus('TxID reset to the pre-filled demo transaction ID.', 'info');
+  }
+
+  /* ────────────────────────────────────────────────────────────────
+     DOCUMENT UPLOAD — PDF / Word / any type
+     Client-side extraction (PDF.js + mammoth) with a server-side
+     fallback (x402 gateway → /extract-text) for other formats.
+     ──────────────────────────────────────────────────────────────── */
+  let attachedFile = null;
+
+  function fileExt(name) {
+    const m = /[^.]+$/.exec(name || '');
+    return m ? m[0].toLowerCase() : '';
+  }
+
+  function setupUpload() {
+    const zone = document.getElementById('uploadZone');
+    const input = document.getElementById('fileInput');
+
+    zone.addEventListener('click', (e) => {
+      if (e.target.closest('.btn-secondary')) return; // button has its own handler
+      input.click();
+    });
+    input.addEventListener('change', (e) => {
+      if (e.target.files && e.target.files[0]) handleFile(e.target.files[0]);
+    });
+
+    ['dragenter', 'dragover'].forEach(ev => zone.addEventListener(ev, (e) => {
+      e.preventDefault();
+      zone.classList.add('dragging');
+    }));
+    ['dragleave', 'drop'].forEach(ev => zone.addEventListener(ev, (e) => {
+      e.preventDefault();
+      zone.classList.remove('dragging');
+    }));
+    zone.addEventListener('drop', (e) => {
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f) handleFile(f);
+    });
+  }
+
+  function showFileChip(file, statusText, ok) {
+    const chip = document.getElementById('fileChip');
+    chip.style.display = 'flex';
+    document.getElementById('fileName').textContent = file.name;
+    document.getElementById('fileSize').textContent = `(${(file.size / 1024).toFixed(1)} KB)`;
+    document.getElementById('fileStatus').textContent = statusText;
+    document.getElementById('fileStatus').style.color = ok === false ? 'var(--high-text)' : 'var(--low-text)';
+  }
+
+  function clearFile() {
+    attachedFile = null;
+    document.getElementById('fileChip').style.display = 'none';
+    document.getElementById('fileInput').value = '';
+    if (!document.getElementById('contractText').value.trim()) {
+      updateCharCount();
+    }
+  }
+
+  function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const b64 = String(reader.result).split(',')[1] || '';
+        resolve(b64);
+      };
+      reader.onerror = () => reject(new Error('Could not read file'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function extractPdfClientSide(file) {
+    if (!window.pdfjsLib) throw new Error('PDF parser not loaded (offline?)');
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    const buf = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    let out = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const tc = await page.getTextContent();
+      out.push(tc.items.map(it => it.str || '').join(' '));
+    }
+    return out.join('\n\n');
+  }
+
+  async function extractDocxClientSide(file) {
+    if (!window.mammoth) throw new Error('Word parser not loaded (offline?)');
+    const buf = await file.arrayBuffer();
+    const r = await mammoth.extractRawText({ arrayBuffer: buf });
+    return (r && r.value) || '';
+  }
+
+  async function extractTextServerSide(file) {
+    const b64 = await fileToBase64(file);
+    const resp = await fetch(`${X402_SERVER}/extract-text`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_name: file.name, file_b64: b64 }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.detail || data.error || `Server error ${resp.status}`);
+    return data.text || '';
+  }
+
+  async function handleFile(file) {
+    const MAX = 20 * 1024 * 1024; // 20 MB
+    if (file.size > MAX) {
+      showStatus(`File too large (max 20 MB). Got ${(file.size / 1024 / 1024).toFixed(1)} MB.`, 'error');
+      return;
+    }
+    attachedFile = file;
+    showFileChip(file, 'Extracting text...');
+    showStatus(`Extracting text from ${file.name}...`, 'info');
+
+    const ext = fileExt(file.name);
+    try {
+      let text = '';
+      if (ext === 'pdf') {
+        text = await extractPdfClientSide(file);
+      } else if (ext === 'docx') {
+        text = await extractDocxClientSide(file);
+      } else if (['txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'log'].includes(ext)) {
+        text = await file.text();
+      } else {
+        // .doc, .odt, .rtf, .html, unknown → server-side extraction
+        text = await extractTextServerSide(file);
+      }
+
+      if (!text || text.trim().length < 20) {
+        // Client-side parser may have returned nothing (scanned PDF) — try server
+        text = await extractTextServerSide(file);
+      }
+      if (!text || text.trim().length < 20) {
+        throw new Error('No readable text found in this document.');
+      }
+
+      document.getElementById('contractText').value = text;
+      updateCharCount();
+      showFileChip(file, `✓ ${text.trim().length.toLocaleString()} chars extracted`, true);
+      showStatus(`Extracted ${text.trim().length.toLocaleString()} characters from ${file.name}. You can edit the text, then analyze.`, 'success');
+    } catch (err) {
+      showFileChip(file, '✗ extraction failed', false);
+      showStatus(`Could not extract text from ${file.name}: ${err.message}`, 'error');
+    }
+  }
+
+  async function init() {
+    try {
+      const r = await fetch(`${AI_BACKEND}/sample-contract`);
+      if (r.ok) {
+        const d = await r.json();
+        document.getElementById('contractText').value = d.contract_text;
+        updateCharCount();
+      }
+    } catch(e) {}
+  }
+
+  function updateCharCount() {
+    const len = document.getElementById('contractText').value.length;
+    document.getElementById('charCount').textContent = `${len.toLocaleString()} characters`;
+    if (!isProcessing) {
+      document.getElementById('analyzeBtn').disabled = len < 20;
+    }
+    if (len >= 20) setStep(1);
+  }
+  document.getElementById('contractText').addEventListener('input', updateCharCount);
+  setupUpload();
+
+  function setStep(n) {
+    for (let i = 1; i <= 4; i++) {
+      const el = document.getElementById(`step${i}`);
+      if (!el) continue;
+      el.className = 'step-item' + (i < n ? ' done' : i === n ? ' active' : '');
+    }
+  }
+
+  function setLoading(loading, text = 'Processing AI Analysis...') {
+    isProcessing = loading;
+    const btn = document.getElementById('analyzeBtn');
+    const spinner = document.getElementById('btnSpinner');
+    const btnText = document.getElementById('btnText');
+
+    const submitBtn = document.getElementById('submitPayBtn');
+    const submitSpinner = document.getElementById('submitSpinner');
+    const submitBtnText = document.getElementById('submitBtnText');
+
+    if (loading) {
+      btn.disabled = true;
+      spinner.style.display = 'inline-block';
+      btnText.textContent = text;
+
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitSpinner.style.display = 'inline-block';
+        submitBtnText.textContent = 'Verifying & Analyzing...';
+      }
+    } else {
+      updateCharCount();
+      spinner.style.display = 'none';
+      btnText.textContent = 'Analyze Contract';
+
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitSpinner.style.display = 'none';
+        submitBtnText.textContent = 'Submit & Verify Payment';
+      }
+    }
+  }
+
+  async function startAnalysis() {
+    const text = document.getElementById('contractText').value.trim();
+    if (!text || isProcessing) return;
+
+    hideAll();
+    setStep(2);
+    setLoading(true, 'Checking Gate...');
+    showStatus('Requesting resource (checking CERBERUS x402 payment gate)...', 'info');
+
+    try {
+      const resp = await callX402Endpoint(text);
+
+      if (resp.status === 402) {
+        await handle402(resp);
+      } else if (resp.status === 200) {
+        const data = await resp.json();
+        renderResults(data);
+        setStep(4);
+      } else {
+        showStatus(`Error ${resp.status}`, 'error');
+      }
+    } catch(e) {
+      showStatus(`Network Error: ${e.message}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function callX402Endpoint(contractText, txProofHeader = '') {
+    const headers = { 'Content-Type': 'application/json' };
+    if (txProofHeader) {
+      headers['payment-signature'] = txProofHeader;
+      headers['X-Payment-TxID'] = txProofHeader;
+    }
+
+    return await fetch(`${X402_SERVER}/analyze-contract`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ contract_text: contractText }),
+    });
+  }
+
+  async function handle402(resp) {
+    const prHeader = resp.headers.get('payment-required') || '';
+    let paymentData = {};
+
+    if (prHeader) {
+      try {
+        const decoded = atob(prHeader);
+        paymentData = JSON.parse(decoded);
+      } catch(e) {}
+    }
+
+    const accepts  = paymentData.accepts?.[0] || {};
+    const receiver = accepts.payTo || '3LMI2BONQHGE6SCKLONQYJQCYIA5R32P5PEXLNXKUQS3CAMXRDDLBV342I';
+    const amount   = accepts.amount || '10000';
+    const amountDisplay = `$${(parseInt(amount) / 1_000_000).toFixed(2)} USDC`;
+
+    currentReceiverAddr = receiver;
+    document.getElementById('receiverAddr').textContent = receiver;
+    document.getElementById('payAmount').textContent    = `${amountDisplay} (ASA ${accepts.asset || 10458941})`;
+
+    // Pre-fill the TxID for instant execution so the demo works without a wallet
+    if (!document.getElementById('txidInput').value) {
+      document.getElementById('txidInput').value = DEMO_TXID;
+    }
+
+    showStatus('HTTP 402 Payment Required: pay $0.01 USDC to the address above and paste your fresh confirmed TxID.', 'warning');
+    document.getElementById('paymentBox').style.display = 'block';
+    setStep(2);
+  }
+
+  async function submitPayment() {
+    const txid = document.getElementById('txidInput').value.trim();
+    const text = document.getElementById('contractText').value.trim();
+    if (!txid || isProcessing) {
+      if (!txid) showStatus('Please enter a Transaction ID.', 'error');
+      return;
+    }
+
+    setStep(3);
+    setLoading(true, 'Verifying On-Chain...');
+    showStatus(`Verifying transaction ${txid.slice(0, 12)}... on Algorand Testnet (AI analysis will execute upon verification)...`, 'info');
+
+    try {
+      const resp = await callX402Endpoint(text, txid);
+
+      if (resp.status === 200) {
+        const data = await resp.json();
+        showStatus('✅ Payment verified on-chain. CERBERUS analysis complete.', 'success');
+        document.getElementById('paymentBox').style.display = 'none';
+        renderResults(data);
+        setStep(4);
+      } else if (resp.status === 402) {
+        const err = await resp.json().catch(() => ({}));
+        showStatus(`❌ Payment verification failed: ${err.detail || err.error || 'Check TxID and try again'}`, 'error');
+      } else {
+        const err = await resp.json().catch(() => ({}));
+        showStatus(`Error ${resp.status}: ${err.detail || err.error || 'Request failed'}`, 'error');
+      }
+    } catch(e) {
+      showStatus(`Network Error: ${e.message}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function renderResults(clauses) {
+    const grid = document.getElementById('resultsGrid');
+    const section = document.getElementById('resultsSection');
+    grid.innerHTML = '';
+
+    const counts = { high: 0, medium: 0, low: 0 };
+    clauses.forEach(c => { counts[c.risk_level] = (counts[c.risk_level] || 0) + 1; });
+
+    document.getElementById('resultsStats').textContent = `${clauses.length} risk clauses identified (${counts.high || 0} high, ${counts.medium || 0} medium, ${counts.low || 0} low)`;
+
+    clauses.forEach((c) => {
+      const card = document.createElement('div');
+      card.className = 'clause-card';
+      card.innerHTML = `
+        <div class="clause-top">
+          <div class="clause-text">"${esc(c.clause)}"</div>
+          <span class="risk-badge ${esc(c.risk_level)}">${esc(c.risk_level)} risk</span>
+        </div>
+        <div class="clause-section-title">Risk Assessment</div>
+        <div class="clause-reason">${esc(c.reason)}</div>
+        <div class="clause-section-title">Recommended Rewrite</div>
+        <div class="clause-rewrite">${esc(c.suggested_rewrite)}</div>
+      `;
+      grid.appendChild(card);
+    });
+
+    section.style.display = 'block';
+  }
+
+  function showStatus(msg, type) {
+    const bar = document.getElementById('statusBar');
+    bar.className = type;
+    bar.style.display = 'flex';
+    bar.textContent = msg;
+  }
+
+  function hideAll() {
+    document.getElementById('paymentBox').style.display = 'none';
+    document.getElementById('resultsSection').style.display = 'none';
+  }
+
+  function openFundPage() {
+    window.open('https://lora.algokit.io/testnet/fund', '_blank');
+  }
+
+  function openReceiverExplorer() {
+    const addr = document.getElementById('receiverAddr').textContent || currentReceiverAddr;
+    window.open(`https://testnet.explorer.perawallet.app/address/${addr}`, '_blank');
+  }
+
+  function esc(str) {
+    return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  init();
+</script>
+</body>
+</html>

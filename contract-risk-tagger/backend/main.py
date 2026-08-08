@@ -1,0 +1,409 @@
+"""
+CERBERUS — Python AI Backend
+Port: 8000 (Bound to 127.0.0.1 - localhost only)
+
+Role: Pure AI analysis service (NO x402 here — that lives in the Node x402-server).
+The x402 Node gateway server (port 4021) verifies payment, then proxies to this backend.
+
+Security:
+  - Binds to 127.0.0.1 ONLY — not reachable externally.
+  - Direct calls to /analyze-contract blocked unless X-Internal-Secret matches .env secret.
+  - INTERNAL_SECRET has NO hardcoded default — server refuses to start if unset.
+"""
+
+import json
+import re
+import base64
+import io
+import zipfile
+import logging
+import os
+from typing import List
+from fastapi import FastAPI, HTTPException, Request, Header
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+import httpx
+
+# Optional document parsers — server-side text extraction fallback for uploads
+try:
+    import pypdf  # PDF text extraction
+except ImportError:
+    pypdf = None
+try:
+    import docx  # python-docx (.docx)
+except ImportError:
+    docx = None
+
+# Load backend/.env — INTERNAL_SECRET must come from .env (NO hardcoded default).
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="CERBERUS — AI Backend", version="2.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Config
+OLLAMA_BASE_URL  = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL     = os.getenv("OLLAMA_MODEL", "mistral:latest")
+OLLAMA_TIMEOUT   = int(os.getenv("OLLAMA_TIMEOUT", "180"))
+
+# INTERNAL_SECRET — NO hardcoded fallback. Must be set in backend/.env or environment.
+INTERNAL_SECRET = os.getenv("INTERNAL_SECRET")
+if not INTERNAL_SECRET:
+    import sys
+    print("FATAL: INTERNAL_SECRET env var is not set. Set it in backend/.env. Refusing to start.", flush=True)
+    sys.exit(1)
+
+class AnalyzeRequest(BaseModel):
+    contract_text: str
+
+
+class ExtractRequest(BaseModel):
+    file_name: str = "contract.txt"
+    file_b64: str = ""  # base64-encoded file bytes
+
+
+MAX_FILE_BYTES = 20 * 1024 * 1024  # 20 MB upload cap
+MAX_TEXT_CHARS  = 50_000             # matches /analyze-contract limit
+
+
+def extract_text_from_bytes(filename: str, data: bytes) -> str:
+    """Best-effort text extraction for common contract document formats.
+
+    Supports PDF, DOCX, DOC (best-effort raw), ODT, RTF, HTML/XML, and plain
+    text files. Returns extracted text (may be truncated), or raises
+    ValueError with a friendly message for unsupported/binary inputs.
+    """
+    name = (filename or "").lower()
+    ext = name.rsplit(".", 1)[-1] if "." in name else ""
+
+    # ── PDF ────────────────────────────────────────────────────────────
+    if ext == "pdf":
+        if pypdf is None:
+            raise ValueError("PDF support not installed on server (pip install pypdf)")
+        try:
+            reader = pypdf.PdfReader(io.BytesIO(data))
+            pages = []
+            for page in reader.pages:
+                pages.append(page.extract_text() or "")
+        except Exception:
+            raise ValueError("Could not read PDF — the file may be corrupt, password-protected, or a scanned image without a text layer.")
+        return "\n\n".join(pages)
+
+    # ── Word (.docx) ──────────────────────────────────────────────────
+    if ext == "docx":
+        if docx is None:
+            raise ValueError("DOCX support not installed on server (pip install python-docx)")
+        d = docx.Document(io.BytesIO(data))
+        parts = [p.text for p in d.paragraphs]
+        for table in d.tables:
+            for row in table.rows:
+                parts.append(" | ".join(cell.text for cell in row.cells))
+        return "\n".join(parts)
+
+    # ── Word (.doc — legacy binary, best-effort raw text) ─────────────
+    if ext == "doc":
+        raw = data.decode("cp1252", errors="ignore")
+        raw = re.sub(r"[^\x20-\x7E\r\n\t]", " ", raw)
+        raw = re.sub(r"\s{3,}", "\n", raw)
+        if len(raw.strip()) < 20:
+            raise ValueError("Could not extract text from legacy .doc (save as .docx or .pdf and retry)")
+        return raw
+
+    # ── OpenDocument Text (.odt / .fodt) — zip containing content.xml ─
+    if ext in ("odt", "fodt"):
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                xml = z.read("content.xml").decode("utf-8", errors="ignore")
+            xml = re.sub(r"<text:p[^>]*>", "\n", xml)
+            xml = re.sub(r"<[^>]+>", "", xml)
+            return re.sub(r"\n{3,}", "\n\n", xml)
+        except Exception:
+            raise ValueError("Could not parse .odt document")
+
+    # ── RTF ───────────────────────────────────────────────────────────
+    if ext == "rtf":
+        if not data.startswith(b"{\\rtf"):
+            raise ValueError("Not a valid RTF file")
+        raw = data.decode("cp1252", errors="ignore")
+        raw = re.sub(r"\\par[d]?", "\n", raw)
+        raw = re.sub(r"\\[a-zA-Z]+-?\d* ?", "", raw)  # strip control words
+        raw = raw.replace("{", "").replace("}", "")
+        return re.sub(r"\n{3,}", "\n\n", raw)
+
+    # ── HTML / XML ────────────────────────────────────────────────────
+    if ext in ("html", "htm", "xml"):
+        import html as html_mod
+        text = html_mod.unescape(data.decode("utf-8", errors="ignore"))
+        text = re.sub(r"<script[^>]*>.*?</script>", " ", text, flags=re.S | re.I)
+        text = re.sub(r"<style[^>]*>.*?</style>", " ", text, flags=re.S | re.I)
+        text = re.sub(r"<[^>]+>", " ", text)
+        return re.sub(r"[ \t]{2,}", " ", text)
+
+    # ── Plain text family ─────────────────────────────────────────────
+    if ext in ("txt", "md", "markdown", "csv", "tsv", "json", "log", "text"):
+        return data.decode("utf-8", errors="replace")
+
+    # ── Unknown extension: sniff for readable text ────────────────────
+    try:
+        return data.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        pass
+    # Last resort: keep printable ASCII/Latin-1 runs
+    raw = data.decode("cp1252", errors="ignore")
+    raw = re.sub(r"[^\x20-\x7E\r\n\t]", "", raw)
+    if len(raw.strip()) < 20:
+        raise ValueError(
+            f"Could not extract text from '{filename}'. Supported: PDF, Word (.doc/.docx), "
+            "ODT, RTF, HTML, and plain text files."
+        )
+    return raw
+
+SAMPLE_CONTRACT = """SERVICE AGREEMENT
+
+1. INDEMNIFICATION
+The Client shall indemnify and hold harmless the Service Provider, its officers, directors,
+employees, and agents from and against any and all claims, damages, losses, costs, and expenses
+(including reasonable attorneys' fees) arising out of or relating to this Agreement, regardless
+of whether such claims arise from the negligence or willful misconduct of the Service Provider.
+
+2. LIMITATION OF LIABILITY
+In no event shall the Service Provider be liable for any indirect, incidental, special,
+consequential, or punitive damages, or any loss of profits or revenues. The Service Provider's
+total liability shall not exceed $100, regardless of the nature of the claim.
+
+3. INTELLECTUAL PROPERTY ASSIGNMENT
+The Client agrees that all work product, inventions, discoveries, and creations developed
+by the Client, even during personal time and using personal resources, shall be the sole
+property of the Service Provider. The Client hereby assigns all intellectual property rights
+to the Service Provider in perpetuity.
+
+4. TERMINATION WITHOUT CAUSE
+The Service Provider may terminate this Agreement at any time, for any reason or no reason,
+with zero notice, and without any obligation to pay severance or any outstanding compensation.
+
+5. GOVERNING LAW
+This Agreement shall be governed by the laws of a jurisdiction chosen solely at the Service
+Provider's discretion, which may be changed at any time without notice to the Client.
+
+6. NON-COMPETE CLAUSE
+For a period of 5 years after termination, the Client agrees not to work in any capacity
+in any industry that competes with the Service Provider's current or future business interests
+anywhere in the world."""
+
+SYSTEM_PROMPT = """You are a legal risk analysis AI. Analyze contract text and identify risky clauses.
+
+OUTPUT RULES (STRICT):
+- Output ONLY a valid JSON array. NO markdown fences, NO explanations, NO preamble.
+- Start your response with [ and end with ]
+- Each object must have exactly these keys: clause, risk_level, reason, suggested_rewrite
+- risk_level must be exactly: "high", "medium", or "low"
+- clause: the specific problematic text quoted from the contract (max 150 chars)
+- reason: why this is risky (1-2 sentences)
+- suggested_rewrite: a safer alternative (1-3 sentences)
+
+Example of correct output format:
+[{"clause":"unlimited indemnification clause","risk_level":"high","reason":"Exposes client to unlimited liability.","suggested_rewrite":"Limit indemnification to direct damages caused by client negligence."}]"""
+
+
+def extract_json_array(raw: str) -> list:
+    """Robustly extract a JSON array even if model wraps in markdown/prose."""
+    raw = raw.strip()
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    clean = re.sub(r"```(?:json)?", "", raw).strip()
+    try:
+        parsed = json.loads(clean)
+        if isinstance(parsed, list):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    start = raw.find("[")
+    end   = raw.rfind("]")
+    if start != -1 and end != -1 and end > start:
+        try:
+            parsed = json.loads(raw[start : end + 1])
+            if isinstance(parsed, list):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
+    raise ValueError(f"Could not parse JSON array from model output: {raw[:300]}")
+
+
+async def analyze_with_ollama(contract_text: str) -> List[dict]:
+    logger.info(f"Sending to Ollama ({OLLAMA_MODEL}), length={len(contract_text)}")
+    payload = {
+        "model": OLLAMA_MODEL,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user",   "content": f"Analyze this contract and return JSON array:\n\n{contract_text}"},
+        ],
+        "stream": False,
+        "options": {
+            "temperature": 0.1,
+            "num_predict": 3000,
+        },
+    }
+
+    async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
+        resp = await client.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload)
+        resp.raise_for_status()
+
+    data        = resp.json()
+    raw_content = data["message"]["content"]
+    clauses     = extract_json_array(raw_content)
+
+    normalised = []
+    for item in clauses:
+        risk = str(item.get("risk_level", "medium")).lower().strip()
+        if risk not in ("high", "medium", "low"):
+            risk = "medium"
+        normalised.append({
+            "clause":            str(item.get("clause", ""))[:500],
+            "risk_level":        risk,
+            "reason":            str(item.get("reason", "")),
+            "suggested_rewrite": str(item.get("suggested_rewrite", "")),
+        })
+
+    logger.info(f"Extracted {len(normalised)} risky clauses")
+    return normalised
+
+
+# ─── Public Routes ────────────────────────────────────────────────────────────
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "CERBERUS-AI", "model": OLLAMA_MODEL}
+
+
+@app.get("/sample-contract")
+async def get_sample():
+    return {"contract_text": SAMPLE_CONTRACT.strip()}
+
+
+# ─── Protected AI Endpoint (Direct Access Forbidden) ─────────────────────────
+
+@app.post("/analyze-contract")
+async def analyze_contract(
+    req: AnalyzeRequest,
+    x_internal_secret: str = Header(None, alias="X-Internal-Secret")
+):
+    """
+    AI analysis endpoint — ONLY callable via CERBERUS x402 gateway (port 4021).
+    Direct external calls without valid X-Internal-Secret header return 403 Forbidden.
+    """
+    if x_internal_secret != INTERNAL_SECRET:
+        logger.warning("Direct access attempt to /analyze-contract blocked (missing/invalid X-Internal-Secret)")
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: Direct access to AI backend is blocked. All requests must be routed through the CERBERUS x402 payment gateway on port 4021."
+        )
+
+    text = req.contract_text.strip()
+    if not text:
+        raise HTTPException(400, "contract_text is required")
+    if len(text) > 50_000:
+        raise HTTPException(400, "Contract too long (max 50,000 chars)")
+
+    logger.info("=== CERBERUS /analyze-contract called via x402 proxy ===")
+
+    try:
+        results = await analyze_with_ollama(text)
+    except httpx.HTTPError as e:
+        logger.error(f"Ollama error: {e}")
+        raise HTTPException(503, f"AI service error: {e}")
+    except ValueError as e:
+        logger.error(f"JSON parse error: {e}")
+        raise HTTPException(500, str(e))
+
+    return results
+
+
+@app.post("/extract-text")
+async def extract_text(
+    req: ExtractRequest,
+    x_internal_secret: str = Header(None, alias="X-Internal-Secret")
+):
+    """
+    Server-side text extraction for uploaded contract documents.
+    ONLY callable via the CERBERUS x402 gateway (port 4021) with the
+    internal secret — same protection as /analyze-contract.
+
+    Request:  { file_name: "contract.pdf", file_b64: "<base64>" }
+    Response: { text, chars, format }
+    """
+    if x_internal_secret != INTERNAL_SECRET:
+        logger.warning("Direct access attempt to /extract-text blocked (missing/invalid X-Internal-Secret)")
+        raise HTTPException(403, "Forbidden: Direct access to AI backend is blocked.")
+
+    try:
+        data = base64.b64decode(req.file_b64, validate=True)
+    except Exception:
+        raise HTTPException(400, "file_b64 must be valid base64 data")
+
+    if not data:
+        raise HTTPException(400, "file is empty")
+    if len(data) > MAX_FILE_BYTES:
+        raise HTTPException(413, f"File too large (max {MAX_FILE_BYTES // (1024 * 1024)} MB)")
+
+    logger.info(f"=== CERBERUS /extract-text called via x402 proxy: {req.file_name} ({len(data)} bytes) ===")
+
+    try:
+        text = extract_text_from_bytes(req.file_name, data)
+    except ValueError as e:
+        logger.warning(f"Extraction failed for {req.file_name}: {e}")
+        raise HTTPException(422, str(e))
+    except Exception as e:
+        logger.error(f"Extraction error for {req.file_name}: {e}")
+        raise HTTPException(500, f"Could not extract text: {e}")
+
+    if len(text) > MAX_TEXT_CHARS:
+        # Stay UNDER the /analyze-contract 50k limit: slice first, then append marker.
+        marker = "\n\n[...TRUNCATED — analysis limited to 50,000 chars]"
+        text = text[: MAX_TEXT_CHARS - len(marker)] + marker
+
+    return {
+        "text": text,
+        "chars": len(text),
+        "format": req.file_name.rsplit(".", 1)[-1].lower() if "." in req.file_name else "text",
+    }
+
+
+# ─── Static Frontend Serving ──────────────────────────────────────────────────
+FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
+if os.path.isdir(FRONTEND_DIR):
+    app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+
+    @app.get("/")
+    async def serve_frontend():
+        return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
+
+
+if __name__ == "__main__":
+    # If run directly (`python main.py`), ALWAYS bind to localhost only.
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=8000)
