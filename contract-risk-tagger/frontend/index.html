@@ -410,18 +410,75 @@
       border-color: var(--accent);
     }
 
-    .demo-hint {
-      font-size: 0.78rem;
-      color: var(--low-text);
-      background: var(--low-bg);
-      border: 1px solid var(--low-border);
-      padding: 8px 12px;
-      border-radius: 4px;
+    .pay-instructions {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      background: var(--bg-alt);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px 16px;
+      margin-bottom: 16px;
+      line-height: 1.7;
+    }
+
+    .pay-instructions ol {
+      padding-left: 18px;
+      margin-top: 6px;
+    }
+
+    .pay-instructions li {
+      margin-bottom: 4px;
+    }
+
+    .pay-instructions a {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    .pay-instructions a:hover {
+      text-decoration: underline;
+    }
+
+    .txid-validation-hint {
+      font-size: 0.75rem;
+      color: var(--text-faint);
       margin-bottom: 16px;
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      gap: 6px;
     }
+
+    .txid-validation-hint.valid   { color: var(--low-text); }
+    .txid-validation-hint.invalid { color: var(--high-text); }
+
+    .address-copy-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .address-copy-row .address-box {
+      flex: 1;
+      margin-bottom: 0;
+    }
+
+    .btn-copy {
+      background: transparent;
+      border: 1px solid var(--border-dark);
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      cursor: pointer;
+      white-space: nowrap;
+      font-family: inherit;
+      transition: all 0.15s ease;
+    }
+
+    .btn-copy:hover { background: var(--bg-alt); color: var(--text); border-color: var(--accent); }
+    .btn-copy.copied { color: var(--low-text); border-color: var(--low-border); }
 
     .action-row {
       display: flex;
@@ -656,28 +713,40 @@
         </div>
       </div>
 
-      <div class="pay-field" style="margin-bottom: 12px;">
+      <div class="pay-field" style="margin-bottom: 4px;">
         <span class="pay-field-label">Recipient Wallet Address</span>
-        <div class="address-box" id="receiverAddr">3LMI2BONQHGE6SCKLONQYJQCYIA5R32P5PEXLNXKUQS3CAMXRDDLBV342I</div>
+      </div>
+      <div class="address-copy-row">
+        <div class="address-box" id="receiverAddr">2TXWLUCA3XVUNDNEFSI6GNSFDD7KXZMQDAWJOYKTZMBMXNZWTXYT73AGCU</div>
+        <button class="btn-copy" id="copyAddrBtn" onclick="copyAddress()" title="Copy wallet address">📋 Copy</button>
       </div>
 
-      <div class="pay-field" style="margin-bottom: 8px;">
+      <div class="pay-instructions">
+        <strong>How to pay:</strong>
+        <ol>
+          <li>Open <a href="https://lora.algokit.io/testnet/fund" target="_blank" rel="noopener">Lora Faucet</a> or <a href="https://testnet.algoexplorer.io" target="_blank" rel="noopener">Pera Wallet (Testnet)</a> and get USDC (ASA 10458941)</li>
+          <li>Send exactly <strong id="payInstructAmount">$0.01 USDC</strong> to the wallet address above</li>
+          <li>Wait ~4 seconds for confirmation, then copy your <strong>Transaction ID</strong> from the wallet or explorer</li>
+          <li>Paste the TxID below and click <em>Verify &amp; Analyze</em></li>
+        </ol>
+      </div>
+
+      <div class="pay-field" style="margin-bottom: 4px;">
         <span class="pay-field-label">Algorand Transaction ID (TxID)</span>
-        <input type="text" id="txidInput" class="input-txid" value="SIAKOLZAYLX3UZK5IL26SLDUDN523ZNSU65HF4CEYS4YOP5WDVKQ" placeholder="Paste 52-character confirmed transaction ID..."/>
       </div>
-
-      <div class="demo-hint">
-        <span>⚡ Pre-filled with valid confirmed Algorand Testnet TxID for instant execution.</span>
-        <button class="btn-secondary" onclick="resetTxId()" style="padding:4px 10px; font-size:0.75rem;">Reset TxID</button>
-      </div>
+      <input type="text" id="txidInput" class="input-txid"
+             placeholder="Paste your 52-character confirmed TxID here..."
+             autocomplete="off" autocorrect="off" spellcheck="false"
+             oninput="onTxidInput(this)"/>
+      <div class="txid-validation-hint" id="txidHint">Enter the TxID from your wallet after sending payment</div>
 
       <div class="action-row">
-        <button class="btn-primary" id="submitPayBtn" onclick="submitPayment()">
+        <button class="btn-primary" id="submitPayBtn" onclick="submitPayment()" disabled>
           <span id="submitSpinner" class="spinner" style="display:none;"></span>
-          <span id="submitBtnText">Submit & Verify Payment</span>
+          <span id="submitBtnText">Verify &amp; Analyze</span>
         </button>
-        <button class="btn-secondary" onclick="openFundPage()">Faucet</button>
-        <button class="btn-secondary" onclick="openReceiverExplorer()">View Explorer</button>
+        <button class="btn-secondary" onclick="openFundPage()">🚰 Faucet</button>
+        <button class="btn-secondary" onclick="openReceiverExplorer()">🔍 Explorer</button>
       </div>
     </div>
   </div>
@@ -700,20 +769,65 @@
   </div>
 </main>
 
-<script>
-  const X402_SERVER = 'http://localhost:4021';
-  const AI_BACKEND  = 'http://localhost:8000';
+  // Dynamic API server origin: works on Vercel deployment, custom domain, or local dev
+  const API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.location.port === '8000'
+    ? 'http://localhost:4021'
+    : window.location.origin;
 
-  // Demo / instant-execution mode: this TxID is accepted by the gateway without
-  // an indexer round-trip (DEMO_MODE=true in x402-server/.env).
-  const DEMO_TXID = 'SIAKOLZAYLX3UZK5IL26SLDUDN523ZNSU65HF4CEYS4YOP5WDVKQ';
+  const X402_SERVER = API_BASE;
+  const AI_BACKEND  = API_BASE;
 
-  let currentReceiverAddr = '3LMI2BONQHGE6SCKLONQYJQCYIA5R32P5PEXLNXKUQS3CAMXRDDLBV342I';
+  // Algorand TxID format: 52 uppercase base32 characters (A-Z, 2-7)
+  const TXID_REGEX = /^[A-Z2-7]{52}$/;
+
+  let currentReceiverAddr = '2TXWLUCA3XVUNDNEFSI6GNSFDD7KXZMQDAWJOYKTZMBMXNZWTXYT73AGCU';
   let isProcessing = false;
 
-  function resetTxId() {
-    document.getElementById('txidInput').value = DEMO_TXID;
-    showStatus('TxID reset to the pre-filled demo transaction ID.', 'info');
+  function onTxidInput(input) {
+    const val = input.value.trim().toUpperCase().replace(/\s/g, '');
+    const hint = document.getElementById('txidHint');
+    const submitBtn = document.getElementById('submitPayBtn');
+
+    if (!val) {
+      hint.className = 'txid-validation-hint';
+      hint.textContent = 'Enter the TxID from your wallet after sending payment';
+      submitBtn.disabled = true;
+      return;
+    }
+
+    if (TXID_REGEX.test(val)) {
+      hint.className = 'txid-validation-hint valid';
+      hint.textContent = '✓ Valid TxID format (52 characters)';
+      submitBtn.disabled = false;
+    } else if (val.length > 52) {
+      hint.className = 'txid-validation-hint invalid';
+      hint.textContent = `✗ Too long (${val.length} chars) — Algorand TxIDs are exactly 52 characters`;
+      submitBtn.disabled = true;
+    } else if (val.length === 52) {
+      hint.className = 'txid-validation-hint invalid';
+      hint.textContent = '✗ Contains invalid characters — use only uppercase A–Z and digits 2–7';
+      submitBtn.disabled = true;
+    } else {
+      hint.className = 'txid-validation-hint';
+      hint.textContent = `${val.length}/52 characters`;
+      submitBtn.disabled = true;
+    }
+  }
+
+  async function copyAddress() {
+    const addr = document.getElementById('receiverAddr').textContent.trim();
+    const btn = document.getElementById('copyAddrBtn');
+    try {
+      await navigator.clipboard.writeText(addr);
+      btn.textContent = '✓ Copied!';
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.textContent = '📋 Copy';
+        btn.classList.remove('copied');
+      }, 2000);
+    } catch (e) {
+      showStatus('Could not copy — please select and copy the address manually.', 'warning');
+    }
   }
 
   /* ────────────────────────────────────────────────────────────────
@@ -977,54 +1091,99 @@
     }
 
     const accepts  = paymentData.accepts?.[0] || {};
-    const receiver = accepts.payTo || '3LMI2BONQHGE6SCKLONQYJQCYIA5R32P5PEXLNXKUQS3CAMXRDDLBV342I';
+    const receiver = accepts.payTo || '2TXWLUCA3XVUNDNEFSI6GNSFDD7KXZMQDAWJOYKTZMBMXNZWTXYT73AGCU';
     const amount   = accepts.amount || '10000';
     const amountDisplay = `$${(parseInt(amount) / 1_000_000).toFixed(2)} USDC`;
 
     currentReceiverAddr = receiver;
     document.getElementById('receiverAddr').textContent = receiver;
     document.getElementById('payAmount').textContent    = `${amountDisplay} (ASA ${accepts.asset || 10458941})`;
+    document.getElementById('payInstructAmount').textContent = amountDisplay;
 
-    // Pre-fill the TxID for instant execution so the demo works without a wallet
-    if (!document.getElementById('txidInput').value) {
-      document.getElementById('txidInput').value = DEMO_TXID;
-    }
+    // Clear the TxID input — user must supply a real, fresh transaction
+    document.getElementById('txidInput').value = '';
+    document.getElementById('submitPayBtn').disabled = true;
+    const hint = document.getElementById('txidHint');
+    hint.className = 'txid-validation-hint';
+    hint.textContent = 'Enter the TxID from your wallet after sending payment';
 
-    showStatus('HTTP 402 Payment Required: pay $0.01 USDC to the address above and paste your fresh confirmed TxID.', 'warning');
+    showStatus('Payment required: send $0.01 USDC on Algorand Testnet and paste your confirmed Transaction ID below.', 'warning');
     document.getElementById('paymentBox').style.display = 'block';
     setStep(2);
   }
 
+  let _timerInterval = null;
+
+  function startElapsedTimer(baseMsg) {
+    stopElapsedTimer();
+    let secs = 0;
+    _timerInterval = setInterval(() => {
+      secs++;
+      const m = Math.floor(secs / 60);
+      const s = secs % 60;
+      const elapsed = m > 0 ? `${m}m ${s}s` : `${s}s`;
+      showStatus(`${baseMsg} (${elapsed} elapsed — large contracts can take up to 10 min on CPU)`, 'info');
+    }, 1000);
+  }
+
+  function stopElapsedTimer() {
+    if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
+  }
+
   async function submitPayment() {
-    const txid = document.getElementById('txidInput').value.trim();
+    const rawTxid = document.getElementById('txidInput').value.trim();
+    const txid = rawTxid.toUpperCase().replace(/\s/g, '');
     const text = document.getElementById('contractText').value.trim();
+
     if (!txid || isProcessing) {
-      if (!txid) showStatus('Please enter a Transaction ID.', 'error');
+      if (!txid) showStatus('Please enter your Transaction ID before submitting.', 'error');
+      return;
+    }
+
+    // Client-side format guard (belt-and-suspenders)
+    if (!TXID_REGEX.test(txid)) {
+      showStatus('Invalid TxID format. An Algorand TxID is exactly 52 uppercase characters (A–Z and 2–7).', 'error');
       return;
     }
 
     setStep(3);
     setLoading(true, 'Verifying On-Chain...');
-    showStatus(`Verifying transaction ${txid.slice(0, 12)}... on Algorand Testnet (AI analysis will execute upon verification)...`, 'info');
+    showStatus(`🔍 Verifying TxID ${txid.slice(0, 12)}... on Algorand Testnet — takes 3–8 seconds.`, 'info');
+
+    // Phase timer: after 8s assume verification passed and AI analysis is running
+    const phaseTimer = setTimeout(() => {
+      setLoading(true, '🤖 AI Analyzing...');
+      startElapsedTimer('🤖 AI analyzing contract clauses');
+    }, 8000);
 
     try {
       const resp = await callX402Endpoint(text, txid);
+      clearTimeout(phaseTimer);
 
       if (resp.status === 200) {
+        stopElapsedTimer();
         const data = await resp.json();
-        showStatus('✅ Payment verified on-chain. CERBERUS analysis complete.', 'success');
+        showStatus('✅ Payment verified & analysis complete.', 'success');
         document.getElementById('paymentBox').style.display = 'none';
         renderResults(data);
         setStep(4);
+      } else if (resp.status === 429) {
+        stopElapsedTimer();
+        showStatus('⏱ Too many requests from your network. Please wait a minute and try again.', 'error');
       } else if (resp.status === 402) {
+        stopElapsedTimer();
         const err = await resp.json().catch(() => ({}));
-        showStatus(`❌ Payment verification failed: ${err.detail || err.error || 'Check TxID and try again'}`, 'error');
+        const detail = err.detail || err.error || 'Payment could not be verified. Ensure the TxID is from a recent, confirmed transaction.';
+        showStatus(`❌ ${detail}`, 'error');
       } else {
+        stopElapsedTimer();
         const err = await resp.json().catch(() => ({}));
-        showStatus(`Error ${resp.status}: ${err.detail || err.error || 'Request failed'}`, 'error');
+        showStatus(`Request failed (${resp.status}): ${err.detail || err.error || 'Please try again.'}`, 'error');
       }
     } catch(e) {
-      showStatus(`Network Error: ${e.message}`, 'error');
+      clearTimeout(phaseTimer);
+      stopElapsedTimer();
+      showStatus(`Network error: ${e.message}. Please check your connection and try again.`, 'error');
     } finally {
       setLoading(false);
     }
@@ -1072,12 +1231,12 @@
   }
 
   function openFundPage() {
-    window.open('https://lora.algokit.io/testnet/fund', '_blank');
+    window.open('https://lora.algokit.io/testnet/fund', '_blank', 'noopener,noreferrer');
   }
 
   function openReceiverExplorer() {
     const addr = document.getElementById('receiverAddr').textContent || currentReceiverAddr;
-    window.open(`https://testnet.explorer.perawallet.app/address/${addr}`, '_blank');
+    window.open(`https://testnet.explorer.perawallet.app/address/${addr}`, '_blank', 'noopener,noreferrer');
   }
 
   function esc(str) {

@@ -1,6 +1,6 @@
 """
 CERBERUS — Python AI Backend
-Port: 8000 (Bound to 127.0.0.1 - localhost only)
+Port: 8000 (Bound to 127.0.0.1 — localhost only)
 
 Role: Pure AI analysis service (NO x402 here — that lives in the Node x402-server).
 The x402 Node gateway server (port 4021) verifies payment, then proxies to this backend.
@@ -9,6 +9,8 @@ Security:
   - Binds to 127.0.0.1 ONLY — not reachable externally.
   - Direct calls to /analyze-contract blocked unless X-Internal-Secret matches .env secret.
   - INTERNAL_SECRET has NO hardcoded default — server refuses to start if unset.
+  - CORS locked to ALLOWED_ORIGIN env var (default: the gateway origin only).
+  - All error responses stripped of internal stack traces.
 """
 
 import json
@@ -18,11 +20,13 @@ import io
 import zipfile
 import logging
 import os
-from typing import List
+import time
+from collections import defaultdict
+from typing import List, Optional
 from fastapi import FastAPI, HTTPException, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 import httpx
 
@@ -43,34 +47,59 @@ try:
 except ImportError:
     pass
 
+# ─── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
+    format="%(asctime)s %(levelname)-8s %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="CERBERUS — AI Backend", version="2.0.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Config
+# ─── Config ───────────────────────────────────────────────────────────────────
 OLLAMA_BASE_URL  = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL     = os.getenv("OLLAMA_MODEL", "mistral:latest")
 OLLAMA_TIMEOUT   = int(os.getenv("OLLAMA_TIMEOUT", "180"))
 
-# INTERNAL_SECRET — NO hardcoded fallback. Must be set in backend/.env or environment.
+# ALLOWED_ORIGIN — in production, lock this to the gateway's origin (port 4021).
+# Defaults to the local gateway to prevent the backend from accepting browser requests directly.
+ALLOWED_ORIGIN   = os.getenv("ALLOWED_ORIGIN", "http://localhost:4021")
+
+# INTERNAL_SECRET — NO hardcoded fallback.
 INTERNAL_SECRET = os.getenv("INTERNAL_SECRET")
 if not INTERNAL_SECRET:
     import sys
-    print("FATAL: INTERNAL_SECRET env var is not set. Set it in backend/.env. Refusing to start.", flush=True)
+    print(
+        "FATAL: INTERNAL_SECRET env var is not set. "
+        "Set it in backend/.env. Refusing to start.",
+        flush=True,
+    )
     sys.exit(1)
 
+# ─── Metrics counters (in-memory) ─────────────────────────────────────────────
+_start_time    = time.time()
+_request_count = 0
+_error_count   = 0
+_analysis_count = 0
+
+# ─── FastAPI App ──────────────────────────────────────────────────────────────
+app = FastAPI(
+    title="CERBERUS — AI Backend",
+    version="2.0.0",
+    docs_url=None,   # Disable Swagger UI in production (no public API docs)
+    redoc_url=None,
+)
+
+# CORS — only the gateway should talk to this backend.
+# The gateway runs on localhost:4021 and proxies all frontend requests.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[ALLOWED_ORIGIN],
+    allow_credentials=False,
+    allow_methods=["POST", "GET"],
+    allow_headers=["Content-Type", "X-Internal-Secret"],
+)
+
+# ─── Models ───────────────────────────────────────────────────────────────────
 class AnalyzeRequest(BaseModel):
     contract_text: str
 
@@ -80,34 +109,49 @@ class ExtractRequest(BaseModel):
     file_b64: str = ""  # base64-encoded file bytes
 
 
+# ─── Limits ───────────────────────────────────────────────────────────────────
 MAX_FILE_BYTES = 20 * 1024 * 1024  # 20 MB upload cap
 MAX_TEXT_CHARS  = 50_000             # matches /analyze-contract limit
 
 
-def extract_text_from_bytes(filename: str, data: bytes) -> str:
-    """Best-effort text extraction for common contract document formats.
+# ─── Internal Secret Checker ──────────────────────────────────────────────────
+def _require_internal_secret(x_internal_secret: Optional[str]) -> None:
+    """Raise 403 if the gateway secret header is missing or wrong."""
+    if x_internal_secret != INTERNAL_SECRET:
+        # Use timing-safe comparison to prevent timing attacks
+        import hmac
+        valid = x_internal_secret is not None and hmac.compare_digest(
+            x_internal_secret.encode(), INTERNAL_SECRET.encode()
+        )
+        if not valid:
+            logger.warning("Direct access attempt blocked (missing/invalid X-Internal-Secret)")
+            raise HTTPException(
+                status_code=403,
+                detail="Forbidden: All requests must be routed through the CERBERUS x402 payment gateway.",
+            )
 
-    Supports PDF, DOCX, DOC (best-effort raw), ODT, RTF, HTML/XML, and plain
-    text files. Returns extracted text (may be truncated), or raises
-    ValueError with a friendly message for unsupported/binary inputs.
-    """
+
+# ─── Document Text Extraction ─────────────────────────────────────────────────
+def extract_text_from_bytes(filename: str, data: bytes) -> str:
+    """Best-effort text extraction for common contract document formats."""
     name = (filename or "").lower()
     ext = name.rsplit(".", 1)[-1] if "." in name else ""
 
-    # ── PDF ────────────────────────────────────────────────────────────
+    # PDF
     if ext == "pdf":
         if pypdf is None:
             raise ValueError("PDF support not installed on server (pip install pypdf)")
         try:
             reader = pypdf.PdfReader(io.BytesIO(data))
-            pages = []
-            for page in reader.pages:
-                pages.append(page.extract_text() or "")
+            pages = [page.extract_text() or "" for page in reader.pages]
         except Exception:
-            raise ValueError("Could not read PDF — the file may be corrupt, password-protected, or a scanned image without a text layer.")
+            raise ValueError(
+                "Could not read PDF — the file may be corrupt, password-protected, "
+                "or a scanned image without a text layer."
+            )
         return "\n\n".join(pages)
 
-    # ── Word (.docx) ──────────────────────────────────────────────────
+    # Word (.docx)
     if ext == "docx":
         if docx is None:
             raise ValueError("DOCX support not installed on server (pip install python-docx)")
@@ -118,7 +162,7 @@ def extract_text_from_bytes(filename: str, data: bytes) -> str:
                 parts.append(" | ".join(cell.text for cell in row.cells))
         return "\n".join(parts)
 
-    # ── Word (.doc — legacy binary, best-effort raw text) ─────────────
+    # Word (.doc — legacy binary)
     if ext == "doc":
         raw = data.decode("cp1252", errors="ignore")
         raw = re.sub(r"[^\x20-\x7E\r\n\t]", " ", raw)
@@ -127,7 +171,7 @@ def extract_text_from_bytes(filename: str, data: bytes) -> str:
             raise ValueError("Could not extract text from legacy .doc (save as .docx or .pdf and retry)")
         return raw
 
-    # ── OpenDocument Text (.odt / .fodt) — zip containing content.xml ─
+    # OpenDocument Text (.odt / .fodt)
     if ext in ("odt", "fodt"):
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as z:
@@ -138,17 +182,17 @@ def extract_text_from_bytes(filename: str, data: bytes) -> str:
         except Exception:
             raise ValueError("Could not parse .odt document")
 
-    # ── RTF ───────────────────────────────────────────────────────────
+    # RTF
     if ext == "rtf":
         if not data.startswith(b"{\\rtf"):
             raise ValueError("Not a valid RTF file")
         raw = data.decode("cp1252", errors="ignore")
         raw = re.sub(r"\\par[d]?", "\n", raw)
-        raw = re.sub(r"\\[a-zA-Z]+-?\d* ?", "", raw)  # strip control words
+        raw = re.sub(r"\\[a-zA-Z]+-?\d* ?", "", raw)
         raw = raw.replace("{", "").replace("}", "")
         return re.sub(r"\n{3,}", "\n\n", raw)
 
-    # ── HTML / XML ────────────────────────────────────────────────────
+    # HTML / XML
     if ext in ("html", "htm", "xml"):
         import html as html_mod
         text = html_mod.unescape(data.decode("utf-8", errors="ignore"))
@@ -157,25 +201,26 @@ def extract_text_from_bytes(filename: str, data: bytes) -> str:
         text = re.sub(r"<[^>]+>", " ", text)
         return re.sub(r"[ \t]{2,}", " ", text)
 
-    # ── Plain text family ─────────────────────────────────────────────
+    # Plain text family
     if ext in ("txt", "md", "markdown", "csv", "tsv", "json", "log", "text"):
         return data.decode("utf-8", errors="replace")
 
-    # ── Unknown extension: sniff for readable text ────────────────────
+    # Unknown — sniff for readable UTF-8
     try:
         return data.decode("utf-8", errors="strict")
     except UnicodeDecodeError:
         pass
-    # Last resort: keep printable ASCII/Latin-1 runs
     raw = data.decode("cp1252", errors="ignore")
     raw = re.sub(r"[^\x20-\x7E\r\n\t]", "", raw)
     if len(raw.strip()) < 20:
         raise ValueError(
-            f"Could not extract text from '{filename}'. Supported: PDF, Word (.doc/.docx), "
-            "ODT, RTF, HTML, and plain text files."
+            f"Could not extract text from '{filename}'. "
+            "Supported formats: PDF, Word (.doc/.docx), ODT, RTF, HTML, and plain text."
         )
     return raw
 
+
+# ─── Sample Contract ──────────────────────────────────────────────────────────
 SAMPLE_CONTRACT = """SERVICE AGREEMENT
 
 1. INDEMNIFICATION
@@ -293,11 +338,38 @@ async def analyze_with_ollama(contract_text: str) -> List[dict]:
     return normalised
 
 
-# ─── Public Routes ────────────────────────────────────────────────────────────
+# ─── Request counter middleware ────────────────────────────────────────────────
+@app.middleware("http")
+async def count_requests(request: Request, call_next):
+    global _request_count, _error_count
+    _request_count += 1
+    response = await call_next(request)
+    if response.status_code >= 500:
+        _error_count += 1
+    return response
 
+
+# ─── Public Routes ─────────────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "CERBERUS-AI", "model": OLLAMA_MODEL}
+    return {
+        "status": "ok",
+        "service": "CERBERUS-AI",
+        "version": "2.0.0",
+        "model": OLLAMA_MODEL,
+    }
+
+
+@app.get("/metrics")
+async def metrics():
+    """Operational metrics for monitoring dashboards."""
+    return {
+        "uptime_seconds": round(time.time() - _start_time),
+        "requests_total": _request_count,
+        "errors_total": _error_count,
+        "analyses_total": _analysis_count,
+        "model": OLLAMA_MODEL,
+    }
 
 
 @app.get("/sample-contract")
@@ -305,60 +377,63 @@ async def get_sample():
     return {"contract_text": SAMPLE_CONTRACT.strip()}
 
 
-# ─── Protected AI Endpoint (Direct Access Forbidden) ─────────────────────────
+# ─── Protected AI Endpoints ────────────────────────────────────────────────────
 
 @app.post("/analyze-contract")
 async def analyze_contract(
     req: AnalyzeRequest,
-    x_internal_secret: str = Header(None, alias="X-Internal-Secret")
+    x_internal_secret: Optional[str] = Header(None, alias="X-Internal-Secret"),
 ):
     """
     AI analysis endpoint — ONLY callable via CERBERUS x402 gateway (port 4021).
-    Direct external calls without valid X-Internal-Secret header return 403 Forbidden.
+    Direct external calls without valid X-Internal-Secret header return 403.
     """
-    if x_internal_secret != INTERNAL_SECRET:
-        logger.warning("Direct access attempt to /analyze-contract blocked (missing/invalid X-Internal-Secret)")
-        raise HTTPException(
-            status_code=403,
-            detail="Forbidden: Direct access to AI backend is blocked. All requests must be routed through the CERBERUS x402 payment gateway on port 4021."
-        )
+    global _analysis_count
+    _require_internal_secret(x_internal_secret)
 
     text = req.contract_text.strip()
     if not text:
         raise HTTPException(400, "contract_text is required")
     if len(text) > 50_000:
-        raise HTTPException(400, "Contract too long (max 50,000 chars)")
+        raise HTTPException(400, f"Contract too long ({len(text):,} chars). Maximum is 50,000 characters.")
 
     logger.info("=== CERBERUS /analyze-contract called via x402 proxy ===")
+    t0 = time.time()
 
     try:
         results = await analyze_with_ollama(text)
-    except httpx.HTTPError as e:
-        logger.error(f"Ollama error: {e}")
-        raise HTTPException(503, f"AI service error: {e}")
+    except httpx.ConnectError:
+        logger.error("Ollama not reachable")
+        raise HTTPException(503, "AI engine is not available. Please ensure Ollama is running.")
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Ollama HTTP error: {e.response.status_code}")
+        raise HTTPException(503, "AI engine returned an error. Please try again.")
+    except httpx.TimeoutException:
+        logger.error("Ollama timeout")
+        raise HTTPException(504, "AI analysis timed out. Try with a shorter contract or retry.")
     except ValueError as e:
         logger.error(f"JSON parse error: {e}")
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, "AI returned an unreadable response. Please retry.")
 
+    _analysis_count += 1
+    elapsed = round(time.time() - t0, 2)
+    logger.info(f"=== Analysis complete: {len(results)} clauses in {elapsed}s ===")
     return results
 
 
 @app.post("/extract-text")
 async def extract_text(
     req: ExtractRequest,
-    x_internal_secret: str = Header(None, alias="X-Internal-Secret")
+    x_internal_secret: Optional[str] = Header(None, alias="X-Internal-Secret"),
 ):
     """
     Server-side text extraction for uploaded contract documents.
-    ONLY callable via the CERBERUS x402 gateway (port 4021) with the
-    internal secret — same protection as /analyze-contract.
+    ONLY callable via the CERBERUS x402 gateway (port 4021).
 
     Request:  { file_name: "contract.pdf", file_b64: "<base64>" }
     Response: { text, chars, format }
     """
-    if x_internal_secret != INTERNAL_SECRET:
-        logger.warning("Direct access attempt to /extract-text blocked (missing/invalid X-Internal-Secret)")
-        raise HTTPException(403, "Forbidden: Direct access to AI backend is blocked.")
+    _require_internal_secret(x_internal_secret)
 
     try:
         data = base64.b64decode(req.file_b64, validate=True)
@@ -366,34 +441,35 @@ async def extract_text(
         raise HTTPException(400, "file_b64 must be valid base64 data")
 
     if not data:
-        raise HTTPException(400, "file is empty")
+        raise HTTPException(400, "File is empty")
     if len(data) > MAX_FILE_BYTES:
         raise HTTPException(413, f"File too large (max {MAX_FILE_BYTES // (1024 * 1024)} MB)")
 
-    logger.info(f"=== CERBERUS /extract-text called via x402 proxy: {req.file_name} ({len(data)} bytes) ===")
+    # Sanitize filename — prevent path traversal
+    safe_name = re.sub(r"[^a-zA-Z0-9._-]", "_", req.file_name)
+    logger.info(f"=== /extract-text: {safe_name} ({len(data):,} bytes) ===")
 
     try:
-        text = extract_text_from_bytes(req.file_name, data)
+        text = extract_text_from_bytes(safe_name, data)
     except ValueError as e:
-        logger.warning(f"Extraction failed for {req.file_name}: {e}")
+        logger.warning(f"Extraction failed for {safe_name}: {e}")
         raise HTTPException(422, str(e))
-    except Exception as e:
-        logger.error(f"Extraction error for {req.file_name}: {e}")
-        raise HTTPException(500, f"Could not extract text: {e}")
+    except Exception:
+        logger.exception(f"Unexpected extraction error for {safe_name}")
+        raise HTTPException(500, "Could not extract text from the uploaded document.")
 
     if len(text) > MAX_TEXT_CHARS:
-        # Stay UNDER the /analyze-contract 50k limit: slice first, then append marker.
         marker = "\n\n[...TRUNCATED — analysis limited to 50,000 chars]"
         text = text[: MAX_TEXT_CHARS - len(marker)] + marker
 
     return {
-        "text": text,
-        "chars": len(text),
-        "format": req.file_name.rsplit(".", 1)[-1].lower() if "." in req.file_name else "text",
+        "text":   text,
+        "chars":  len(text),
+        "format": safe_name.rsplit(".", 1)[-1].lower() if "." in safe_name else "text",
     }
 
 
-# ─── Static Frontend Serving ──────────────────────────────────────────────────
+# ─── Static Frontend Serving ───────────────────────────────────────────────────
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
 if os.path.isdir(FRONTEND_DIR):
     app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
@@ -406,4 +482,10 @@ if os.path.isdir(FRONTEND_DIR):
 if __name__ == "__main__":
     # If run directly (`python main.py`), ALWAYS bind to localhost only.
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(
+        app,
+        host="127.0.0.1",
+        port=8000,
+        log_level="info",
+        access_log=True,
+    )

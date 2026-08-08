@@ -1,0 +1,25 @@
+{
+  "name": "cerberus-x402-contract-risk-analyzer",
+  "version": "2.0.0",
+  "description": "CERBERUS — x402 AI Legal Contract Risk Analyzer deployed on Vercel",
+  "main": "api/index.ts",
+  "scripts": {
+    "dev": "cd x402-server && npm run dev",
+    "build": "tsc --noEmit",
+    "start": "cd x402-server && npm start"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.0.2",
+    "@x402-avm/extensions": "^2.6.1",
+    "@x402/avm": "^2.12.0",
+    "@x402/core": "^2.12.0",
+    "@x402/hono": "^2.12.0",
+    "dotenv": "^17.4.2",
+    "hono": "^4.12.19"
+  },
+  "devDependencies": {
+    "@types/node": "^25.8.0",
+    "tsx": "^4.22.0",
+    "typescript": "^6.0.3"
+  }
+}

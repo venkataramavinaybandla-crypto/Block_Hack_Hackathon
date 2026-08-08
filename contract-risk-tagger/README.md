@@ -36,7 +36,7 @@ INTERNAL_SECRET=change-me-to-a-long-random-string
 
 # x402-server/.env  (see x402-server/.env.example)
 INTERNAL_SECRET=change-me-to-a-long-random-string   # MUST match backend/.env
-AVM_ADDRESS=3LMI2BONQHGE6SCKLONQYJQCYIA5R32P5PEXLNXKUQS3CAMXRDDLBV342I
+AVM_ADDRESS=2TXWLUCA3XVUNDNEFSI6GNSFDD7KXZMQDAWJOYKTZMBMXNZWTXYT73AGCU
 DEMO_MODE=true                                       # instant-execution demo TxID
 DEMO_TXID=SIAKOLZAYLX3UZK5IL26SLDUDN523ZNSU65HF4CEYS4YOP5WDVKQ
 ```
@@ -52,7 +52,7 @@ If `INTERNAL_SECRET` is missing, the server prints `FATAL: INTERNAL_SECRET env v
 
 ### 1. Fund Wallet (Algorand Testnet USDC)
 - Visit: https://lora.algokit.io/testnet/fund
-- Wallet: `3LMI2BONQHGE6SCKLONQYJQCYIA5R32P5PEXLNXKUQS3CAMXRDDLBV342I`
+- Wallet: `2TXWLUCA3XVUNDNEFSI6GNSFDD7KXZMQDAWJOYKTZMBMXNZWTXYT73AGCU`
 
 > **Demo / instant execution**: the frontend pre-fills a well-formed demo TxID
 > (`SIAKOLZAYLX3UZK5IL26SLDUDN523ZNSU65HF4CEYS4YOP5WDVKQ`) which the gateway
@@ -93,11 +93,11 @@ http://localhost:8000
 
 ## Wallet
 
-- **Address**: `3LMI2BONQHGE6SCKLONQYJQCYIA5R32P5PEXLNXKUQS3CAMXRDDLBV342I`
+- **Address**: `2TXWLUCA3XVUNDNEFSI6GNSFDD7KXZMQDAWJOYKTZMBMXNZWTXYT73AGCU`
 - **Network**: Algorand Testnet
 - **Payment**: USDC (ASA 10458941)
 - **Price**: $0.01 USDC per analysis
-- **Explorer**: https://testnet.explorer.perawallet.app/address/3LMI2BONQHGE6SCKLONQYJQCYIA5R32P5PEXLNXKUQS3CAMXRDDLBV342I
+- **Explorer**: https://testnet.explorer.perawallet.app/address/2TXWLUCA3XVUNDNEFSI6GNSFDD7KXZMQDAWJOYKTZMBMXNZWTXYT73AGCU
 
 ## Stack
 
